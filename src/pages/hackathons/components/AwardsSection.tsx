@@ -1,0 +1,245 @@
+import { useState } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { hackathonsApi } from '@/api/hackathons'
+import { Plus, Trash2, Trophy, Check, X, Pencil } from 'lucide-react'
+import { toast } from 'sonner'
+import { useI18n } from '@/i18n'
+import type { Award } from '@/types/api.types'
+import { inputCls } from './FormSection'
+
+interface AwardsSectionProps {
+  hackathonId?: string
+  awards?: Award[]
+  mode?: 'edit' | 'create'
+  onChange?: (awards: Array<{ name: string; place: number; description?: string; certificate?: string }>) => void
+}
+
+const PLACE_COLORS: Record<number, string> = {
+  1: 'bg-amber-400 text-white',
+  2: 'bg-gray-300 text-gray-800',
+  3: 'bg-amber-600 text-white',
+}
+
+export function AwardsSection({ hackathonId, awards: initialAwards = [], mode = 'edit', onChange }: AwardsSectionProps) {
+  const qc = useQueryClient()
+  const { t, lang } = useI18n()
+  const [adding, setAdding] = useState(false)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [form, setForm] = useState({ name: '', place: '1', description: '', certificate: '' })
+
+  // Local state for create mode
+  const [localAwards, setLocalAwards] = useState<Array<Award & { id: string }>>([])
+
+  const { data: awardsData } = useQuery({
+    queryKey: ['awards', hackathonId],
+    queryFn: () => hackathonsApi.listAwards(hackathonId!),
+    enabled: mode === 'edit' && !!hackathonId,
+  })
+
+  const awards = mode === 'edit' ? (awardsData?.data?.data ?? initialAwards) : localAwards
+
+  const createMut = useMutation({
+    mutationFn: () =>
+      hackathonsApi.createAward(hackathonId!, {
+        name: form.name,
+        place: Number(form.place),
+        description: form.description || undefined,
+        certificate: form.certificate || undefined,
+      }),
+    onSuccess: () => {
+      toast.success(lang === 'uk' ? 'Нагороду додано' : 'Award added')
+      qc.invalidateQueries({ queryKey: ['awards', hackathonId] })
+      qc.invalidateQueries({ queryKey: ['hackathon', hackathonId] })
+      setAdding(false)
+      setForm({ name: '', place: '1', description: '', certificate: '' })
+    },
+    onError: () => toast.error(lang === 'uk' ? 'Помилка при створенні нагороди' : 'Error creating award'),
+  })
+
+  const updateMut = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Partial<Award> }) =>
+      hackathonsApi.updateAward(hackathonId!, id, {
+        name: data.name,
+        place: data.place !== undefined ? Number(data.place) : undefined,
+        description: data.description || undefined,
+        certificate: data.certificate || undefined,
+      }),
+    onSuccess: () => {
+      toast.success(lang === 'uk' ? 'Нагороду оновлено' : 'Award updated')
+      qc.invalidateQueries({ queryKey: ['awards', hackathonId] })
+      qc.invalidateQueries({ queryKey: ['hackathon', hackathonId] })
+      setEditingId(null)
+    },
+    onError: () => toast.error(lang === 'uk' ? 'Помилка при оновленні нагороди' : 'Error updating award'),
+  })
+
+  const deleteMut = useMutation({
+    mutationFn: (awardId: string) => hackathonsApi.deleteAward(hackathonId!, awardId),
+    onSuccess: () => {
+      toast.success(lang === 'uk' ? 'Нагороду видалено' : 'Award deleted')
+      qc.invalidateQueries({ queryKey: ['awards', hackathonId] })
+      qc.invalidateQueries({ queryKey: ['hackathon', hackathonId] })
+    },
+    onError: () => toast.error(lang === 'uk' ? 'Помилка при видаленні' : 'Error deleting award'),
+  })
+
+  const sorted = [...awards].sort((a, b) => a.place - b.place)
+
+  const handleSaveAdd = () => {
+    if (mode === 'create') {
+      const newAward = {
+        id: Date.now().toString(),
+        name: form.name,
+        place: Number(form.place),
+        description: form.description || undefined,
+        certificate: form.certificate || undefined,
+      } as Award & { id: string }
+      const newArr = [...localAwards, newAward]
+      setLocalAwards(newArr)
+      onChange?.(newArr.map(a => ({ name: a.name, place: a.place, description: a.description || undefined, certificate: a.certificate || undefined })))
+      setAdding(false)
+      setForm({ name: '', place: '1', description: '', certificate: '' })
+    } else {
+      createMut.mutate()
+    }
+  }
+
+  const handleSaveEdit = (id: string) => {
+    if (mode === 'create') {
+      const newArr = localAwards.map(x => x.id === id ? { ...x, name: form.name, place: Number(form.place), description: form.description || undefined, certificate: form.certificate || undefined } : x)
+      setLocalAwards(newArr)
+      onChange?.(newArr.map(a => ({ name: a.name, place: a.place, description: a.description || undefined, certificate: a.certificate || undefined })))
+      setEditingId(null)
+    } else {
+      updateMut.mutate({ id, data: { name: form.name, place: Number(form.place), description: form.description || undefined, certificate: form.certificate || undefined } })
+    }
+  }
+
+  const handleDelete = (id: string) => {
+    if (mode === 'create') {
+      const newArr = localAwards.filter(x => x.id !== id)
+      setLocalAwards(newArr)
+      onChange?.(newArr.map(a => ({ name: a.name, place: a.place, description: a.description || undefined, certificate: a.certificate || undefined })))
+    } else {
+      deleteMut.mutate(id)
+    }
+  }
+
+  const handleCancel = () => {
+    setAdding(false)
+    setEditingId(null)
+    setForm({ name: '', place: '1', description: '', certificate: '' })
+  }
+
+  return (
+    <div className="space-y-3">
+      {sorted.length === 0 && !adding && (
+        <p className="text-sm text-muted-foreground italic">
+          {lang === 'uk' ? 'Нагород ще немає.' : 'No awards yet.'}
+        </p>
+      )}
+
+      {sorted.map((award) => (
+        <div key={award.id} className="rounded-lg border border-border bg-background px-4 py-3">
+          {editingId === award.id ? (
+            <div className="space-y-2">
+              <div className="grid grid-cols-2 gap-2">
+                <input placeholder={lang === 'uk' ? 'Назва нагороди *' : 'Award name *'} value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })} className={inputCls} />
+                <input type="number" min="1" max="100" placeholder={lang === 'uk' ? 'Місце *' : 'Place *'} value={form.place}
+                  onChange={(e) => setForm({ ...form, place: e.target.value })} className={inputCls} />
+              </div>
+              <input placeholder={lang === 'uk' ? "Опис нагороди (необов'язково)" : 'Award description (optional)'} value={form.description}
+                onChange={(e) => setForm({ ...form, description: e.target.value })} className={inputCls} />
+              <input placeholder={lang === 'uk' ? "Посилання на сертифікат (необов'язково)" : 'Certificate link (optional)'} value={form.certificate}
+                onChange={(e) => setForm({ ...form, certificate: e.target.value })} className={inputCls} />
+              <div className="flex gap-2">
+                <button type="button" onClick={() => handleSaveEdit(award.id)} disabled={!form.name || !form.place || updateMut.isPending}
+                  className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs text-primary-foreground hover:bg-primary/90 disabled:opacity-60">
+                  <Check className="h-3.5 w-3.5" /> {t.actions.save}
+                </button>
+                <button type="button" onClick={handleCancel}
+                  className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs hover:bg-accent">
+                  <X className="h-3.5 w-3.5" /> {t.actions.cancel}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-start gap-3">
+              <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-bold ${PLACE_COLORS[award.place] ?? 'bg-muted text-muted-foreground'}`}>
+                {award.place}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <Trophy className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+                  <p className="text-sm font-medium">{award.name}</p>
+                </div>
+                {award.description && <p className="text-xs text-muted-foreground mt-0.5">{award.description}</p>}
+                {award.certificate && (
+                  <a href={award.certificate} target="_blank" rel="noreferrer"
+                    className="text-xs text-primary hover:underline mt-0.5 block">
+                    🎖 {lang === 'uk' ? 'Сертифікат' : 'Certificate'}
+                  </a>
+                )}
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
+                <button type="button" onClick={() => {
+                  setEditingId(award.id)
+                  setAdding(false)
+                  setForm({
+                    name: award.name,
+                    place: String(award.place),
+                    description: award.description || '',
+                    certificate: award.certificate || ''
+                  })
+                }}
+                  className="rounded-md p-1.5 hover:bg-accent transition-colors">
+                  <Pencil className="h-4 w-4 text-muted-foreground" />
+                </button>
+                <button type="button" onClick={() => handleDelete(award.id)}
+                  className="rounded-md p-1.5 hover:bg-destructive/10 transition-colors">
+                  <Trash2 className="h-4 w-4 text-destructive" />
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      ))}
+
+      {adding ? (
+        <div className="space-y-2 rounded-lg border border-primary/30 bg-primary/5 p-4">
+          <div className="grid grid-cols-2 gap-2">
+            <input placeholder={lang === 'uk' ? 'Назва нагороди *' : 'Award name *'} value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })} className={inputCls} />
+            <input type="number" min="1" max="100" placeholder={lang === 'uk' ? 'Місце *' : 'Place *'} value={form.place}
+              onChange={(e) => setForm({ ...form, place: e.target.value })} className={inputCls} />
+          </div>
+          <input placeholder={lang === 'uk' ? "Опис (необов'язково)" : 'Description (optional)'} value={form.description}
+            onChange={(e) => setForm({ ...form, description: e.target.value })} className={inputCls} />
+          <input placeholder={lang === 'uk' ? "URL сертифіката (необов'язково)" : 'Certificate URL (optional)'} value={form.certificate}
+            onChange={(e) => setForm({ ...form, certificate: e.target.value })} className={inputCls} />
+          <div className="flex gap-2">
+            <button type="button" onClick={handleSaveAdd}
+              disabled={!form.name.trim() || !form.place || createMut.isPending}
+              className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs text-primary-foreground hover:bg-primary/90 disabled:opacity-60">
+              <Check className="h-3.5 w-3.5" /> {lang === 'uk' ? 'Додати' : 'Add'}
+            </button>
+            <button type="button" onClick={handleCancel}
+              className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs hover:bg-accent">
+              <X className="h-3.5 w-3.5" /> {t.actions.cancel}
+            </button>
+          </div>
+        </div>
+      ) : !editingId && (
+        <button type="button" onClick={() => {
+          setAdding(true);
+          setEditingId(null);
+          setForm({ name: '', place: String(sorted.length + 1), description: '', certificate: '' });
+        }}
+          className="flex items-center gap-2 rounded-lg border border-dashed border-border px-3 py-2 text-sm text-muted-foreground hover:bg-accent hover:text-foreground transition-colors w-full">
+          <Plus className="h-4 w-4" /> {lang === 'uk' ? 'Додати нагороду' : 'Add award'}
+        </button>
+      )}
+    </div>
+  )
+}

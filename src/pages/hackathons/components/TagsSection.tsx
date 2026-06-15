@@ -1,0 +1,137 @@
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { tagsApi } from '@/api/tags'
+import { hackathonsApi } from '@/api/hackathons'
+import { useState } from 'react'
+import { Plus, X } from 'lucide-react'
+import { toast } from 'sonner'
+import { useI18n } from '@/i18n'
+import type { Tag } from '@/types/api.types'
+import { inputCls } from './FormSection'
+
+interface TagsSectionProps {
+  hackathonId?: string
+  selectedTags: Tag[]
+  mode?: 'edit' | 'create'
+  onChange?: (tags: string[]) => void
+}
+
+export function TagsSection({ hackathonId, selectedTags: initialSelected = [], mode = 'edit', onChange }: TagsSectionProps) {
+  const { t, lang } = useI18n()
+  const qc = useQueryClient()
+  const [newTagName, setNewTagName] = useState('')
+  const [creating, setCreating] = useState(false)
+
+  // Local state for create mode
+  const [localSelectedTags, setLocalSelectedTags] = useState<Tag[]>(initialSelected)
+
+  const { data: allTagsData } = useQuery({
+    queryKey: ['tags'],
+    queryFn: () => tagsApi.list(),
+  })
+  
+  const allTags: Tag[] = allTagsData?.data.data ?? []
+  
+  const selectedTags = mode === 'edit' ? initialSelected : localSelectedTags
+  const selectedIds = selectedTags.map((t) => t.id)
+  const unselected = allTags.filter((t) => !selectedIds.includes(t.id))
+
+  const attachMut = useMutation({
+    mutationFn: (tagId: string) => hackathonsApi.attachTags(hackathonId!, [tagId]),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['hackathon', hackathonId] }),
+    onError: () => toast.error(lang === 'uk' ? 'Помилка при додаванні тегу' : 'Error adding tag'),
+  })
+
+  const detachMut = useMutation({
+    mutationFn: (tagId: string) => hackathonsApi.detachTag(hackathonId!, tagId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['hackathon', hackathonId] }),
+    onError: () => toast.error(lang === 'uk' ? 'Помилка при видаленні тегу' : 'Error removing tag'),
+  })
+
+  const createMut = useMutation({
+    mutationFn: () => tagsApi.create(newTagName),
+    onSuccess: (res) => {
+      const tag = res.data.data
+      qc.invalidateQueries({ queryKey: ['tags'] })
+      if (mode === 'create') {
+        handleAttach(tag)
+      } else {
+        attachMut.mutate(tag.id)
+      }
+      setNewTagName(''); setCreating(false)
+    },
+    onError: () => toast.error(lang === 'uk' ? 'Помилка при створенні тегу' : 'Error creating tag'),
+  })
+
+  const handleAttach = (tag: Tag) => {
+    if (mode === 'create') {
+      const newArr = [...localSelectedTags, tag]
+      setLocalSelectedTags(newArr)
+      onChange?.(newArr.map(t => t.name))
+    } else {
+      attachMut.mutate(tag.id)
+    }
+  }
+
+  const handleDetach = (tagId: string) => {
+    if (mode === 'create') {
+      const newArr = localSelectedTags.filter(t => t.id !== tagId)
+      setLocalSelectedTags(newArr)
+      onChange?.(newArr.map(t => t.name))
+    } else {
+      detachMut.mutate(tagId)
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      {/* Selected tags */}
+      <div className="flex flex-wrap gap-2">
+        {selectedTags.map((tag) => (
+          <span key={tag.id} className="flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
+            {tag.name}
+            <button type="button" onClick={() => handleDetach(tag.id)} className="hover:text-destructive">
+              <X className="h-3 w-3" />
+            </button>
+          </span>
+        ))}
+        {selectedTags.length === 0 && (
+          <p className="text-sm text-muted-foreground italic">
+            {lang === 'uk' ? 'Теги не вибрані' : 'No tags selected'}
+          </p>
+        )}
+      </div>
+
+      {/* Available tags to add */}
+      {unselected.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {unselected.map((tag) => (
+            <button key={tag.id} type="button" onClick={() => handleAttach(tag)}
+              className="rounded-full border border-dashed border-border px-3 py-0.5 text-xs text-muted-foreground hover:border-primary hover:text-primary transition-colors">
+              + {tag.name}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Create new tag */}
+      {creating ? (
+        <div className="flex gap-2">
+          <input placeholder={lang === 'uk' ? 'Назва нового тегу' : 'New tag name'} value={newTagName} onChange={(e) => setNewTagName(e.target.value)}
+            className={inputCls} onKeyDown={(e) => e.key === 'Enter' && newTagName.trim() && createMut.mutate()} />
+          <button type="button" onClick={() => createMut.mutate()} disabled={!newTagName.trim()}
+            className="rounded-lg bg-primary px-3 py-2 text-xs text-primary-foreground hover:bg-primary/90 disabled:opacity-60">
+            {t.actions.create}
+          </button>
+          <button type="button" onClick={() => setCreating(false)} className="rounded-lg border border-border px-3 py-2 text-xs hover:bg-accent">
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      ) : (
+        <button type="button" onClick={() => setCreating(true)}
+          className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors">
+          <Plus className="h-3.5 w-3.5" /> {lang === 'uk' ? 'Створити новий тег' : 'Create new tag'}
+        </button>
+      )}
+    </div>
+  )
+}
